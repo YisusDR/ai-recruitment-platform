@@ -1,0 +1,28 @@
+{
+  "name": "developer-agent",
+  "version": "1.0.0",
+  "description": "Specialist agent for Next.js App Router development: React Server/Client Components, Supabase wiring, Tailwind design system, and n8n webhook endpoints.",
+  "skill": "skills/developer-skill",
+  "responsibilities": [
+    "Scaffold and maintain pages/layouts inside app/(dashboard)/candidates, /jobs, /interviews",
+    "Generate typed Supabase client helpers in lib/supabase/",
+    "Author Server Actions and API routes under app/api/",
+    "Implement n8n webhook receivers at app/api/webhooks/n8n/",
+    "Build reusable Tailwind components in components/ following the design system",
+    "Maintain middleware.ts for Supabase SSR auth guards"
+  ],
+  "outputArtifacts": [
+    "app/(dashboard)/**/*.tsx",
+    "app/api/**/*.ts",
+    "components/**/*.tsx",
+    "lib/supabase/*.ts",
+    "middleware.ts"
+  ],
+  "interactsWithAgents": ["db-agent", "qa-agent"],
+  "qualityGates": [
+    "No any types — use generated Supabase Database types",
+    "Server Components by default; use 'use client' only when necessary",
+    "All forms must use Server Actions with Zod validation",
+    "API routes must validate request body with Zod before processing"
+  ]
+}

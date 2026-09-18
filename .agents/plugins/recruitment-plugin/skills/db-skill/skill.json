@@ -1,0 +1,35 @@
+{
+  "name": "db-skill",
+  "version": "1.0.0",
+  "description": "PostgreSQL 15 + pgvector schema design, migration authoring, RLS policy generation, and semantic-vector pipeline scaffolding for the ATS.",
+  "engine": "postgresql@15",
+  "extensions": ["pgvector", "uuid-ossp", "pg_trgm"],
+  "capabilities": [
+    "schema-design",
+    "migration-authoring",
+    "rls-policies",
+    "vector-indexing",
+    "seed-data"
+  ],
+  "conventions": {
+    "primaryKey": "UUID (gen_random_uuid())",
+    "timestamps": "created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW()",
+    "softDelete": "deleted_at TIMESTAMPTZ DEFAULT NULL",
+    "vectorColumn": "embedding VECTOR(1536)",
+    "migrationDir": "supabase/migrations",
+    "migrationNaming": "YYYYMMDDHHMMSS_<slug>.sql"
+  },
+  "coreEntities": [
+    "candidates",
+    "jobs",
+    "applications",
+    "interviews",
+    "evaluation_scores"
+  ],
+  "vectorPipeline": {
+    "embeddingModel": "text-embedding-3-small",
+    "indexType": "ivfflat",
+    "indexLists": 100,
+    "distanceFunction": "cosine"
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "name": "developer-skill",
+  "version": "1.0.0",
+  "description": "Next.js 14 App Router + Tailwind CSS component authoring, route scaffolding, Supabase client wiring, and n8n webhook endpoint generation for the ATS.",
+  "engine": "next@14",
+  "capabilities": [
+    "app-router-scaffolding",
+    "server-components",
+    "client-components",
+    "api-route-generation",
+    "supabase-client-wiring",
+    "n8n-webhook-endpoints",
+    "tailwind-design-system"
+  ],
+  "conventions": {
+    "componentNaming": "PascalCase",
+    "fileNaming": "kebab-case",
+    "stateManagement": "React Server Components + Zustand (client islands)",
+    "fetchPattern": "Server Actions preferred; SWR for real-time client views",
+    "authGuard": "middleware.ts (Supabase SSR session check)",
+    "envPrefix": "NEXT_PUBLIC_ for public keys; server-only for secrets"
+  },
+  "directoryScope": {
+    "candidates": "app/(dashboard)/candidates",
+    "jobs": "app/(dashboard)/jobs",
+    "interviews": "app/(dashboard)/interviews",
+    "api": "app/api",
+    "components": "components",
+    "lib": "lib"
+  },
+  "designSystem": {
+    "colorPrimary": "indigo",
+    "colorAccent": "violet",
+    "colorNeutral": "slate",
+    "borderRadius": "rounded-xl",
+    "fontFamily": "Inter (Google Fonts)",
+    "darkMode": "class"
+  },
+  "n8nIntegration": {
+    "webhookBase": "/api/webhooks/n8n",
+    "events": [
+      "cv.ingested",
+      "application.scored",
+      "interview.scheduled",
+      "stage.advanced"
+    ]
+  }
+}

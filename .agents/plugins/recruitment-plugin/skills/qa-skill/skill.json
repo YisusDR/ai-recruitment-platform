@@ -1,0 +1,43 @@
+{
+  "name": "qa-skill",
+  "version": "1.0.0",
+  "description": "Git hooks (Husky), ESLint, Prettier, TypeScript strict-mode validation, and migration integrity checks for the ATS harness.",
+  "capabilities": [
+    "git-hooks",
+    "eslint-enforcement",
+    "prettier-formatting",
+    "typescript-strict",
+    "migration-lint",
+    "test-scaffolding"
+  ],
+  "tools": {
+    "gitHooks": "husky@9",
+    "lintStaged": "lint-staged@15",
+    "eslint": "eslint@8 + @typescript-eslint + eslint-config-next",
+    "prettier": "prettier@3",
+    "typecheck": "tsc --noEmit",
+    "testing": "vitest@1 + @testing-library/react"
+  },
+  "hooks": {
+    "pre-commit": [
+      "lint-staged",
+      "tsc --noEmit"
+    ],
+    "pre-push": [
+      "vitest run --reporter=verbose",
+      "node .agents/plugins/recruitment-plugin/hooks/migration-lint.mjs"
+    ],
+    "commit-msg": "commitlint --edit"
+  },
+  "lintStagedConfig": {
+    "*.{ts,tsx}": ["eslint --fix", "prettier --write"],
+    "*.{json,md,css}": ["prettier --write"],
+    "supabase/migrations/*.sql": ["node .agents/plugins/recruitment-plugin/hooks/sql-lint.mjs"]
+  },
+  "eslintRules": {
+    "@typescript-eslint/no-explicit-any": "error",
+    "@typescript-eslint/no-unused-vars": "error",
+    "no-console": "warn",
+    "react-hooks/exhaustive-deps": "error"
+  }
+}

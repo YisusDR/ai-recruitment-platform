@@ -1,0 +1,25 @@
+{
+  "name": "db-agent",
+  "version": "1.0.0",
+  "description": "Specialist agent for all database operations: schema design, migration authoring, RLS policies, pgvector indexing, and seed data for the ATS.",
+  "skill": "skills/db-skill",
+  "responsibilities": [
+    "Design and own all Supabase migration files under supabase/migrations/",
+    "Enforce UUID primary keys and strict FK relationships on every entity",
+    "Generate RLS policies for multi-tenant candidate/job data isolation",
+    "Scaffold pgvector HNSW/IVFFlat indexes on CV embedding columns",
+    "Produce seed SQL for local development and CI fixtures"
+  ],
+  "outputArtifacts": [
+    "supabase/migrations/<timestamp>_<slug>.sql",
+    "supabase/seed.sql",
+    "docs/db/schema-erd.md"
+  ],
+  "interactsWithAgents": ["developer-agent"],
+  "qualityGates": [
+    "Every migration must be idempotent (CREATE ... IF NOT EXISTS)",
+    "Every table must have created_at / updated_at triggers",
+    "pgvector extension must be enabled before any VECTOR column",
+    "RLS must be enabled on every public-schema table"
+  ]
+}

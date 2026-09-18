@@ -1,0 +1,35 @@
+{
+  "name": "recruitment-plugin",
+  "version": "1.0.0",
+  "description": "AI Recruitment Platform (ATS) — advanced dev harness. Provides db-skill, developer-skill, and qa-skill sub-agents for full-stack ATS development with Next.js, Supabase/pgvector, Tailwind CSS, and n8n automation endpoints.",
+  "author": "antigravity-cli-harness",
+  "stack": {
+    "frontend": "Next.js 14 (App Router) + Tailwind CSS",
+    "backend": "Supabase (PostgreSQL 15 + pgvector)",
+    "automation": "n8n webhooks",
+    "auth": "Supabase Auth (JWT)"
+  },
+  "skills": [
+    "skills/db-skill",
+    "skills/developer-skill",
+    "skills/qa-skill"
+  ],
+  "agents": [
+    "agents/db-agent",
+    "agents/developer-agent",
+    "agents/qa-agent"
+  ],
+  "directoryScope": {
+    "frontend": [
+      "app/(dashboard)/candidates",
+      "app/(dashboard)/jobs",
+      "app/(dashboard)/interviews"
+    ],
+    "api": "app/api",
+    "database": "supabase/migrations"
+  },
+  "hooks": {
+    "pre-commit": ".agents/plugins/recruitment-plugin/hooks/pre-commit.sh",
+    "pre-push": ".agents/plugins/recruitment-plugin/hooks/pre-push.sh"
+  }
+}

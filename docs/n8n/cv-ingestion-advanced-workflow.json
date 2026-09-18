@@ -1,0 +1,439 @@
+{
+  "name": "ATS — CV Ingestion Advanced (LangChain Architecture)",
+  "nodes": [
+    {
+      "id": "node-1",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300],
+      "parameters": {
+        "path": "cv-ingested",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": false
+        }
+      },
+      "webhookId": "ats-cv-ingested-webhook"
+    },
+
+    {
+      "id": "node-2",
+      "name": "Extract File Info",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300],
+      "parameters": {
+        "jsCode": "const file = $binary.data;\nconst body = $json;\nif (!file) throw new Error('No binary data received. Send the PDF as field name \\'data\\'.');\nif (!body.candidate_id) throw new Error('Missing candidate_id in form body.');\n\nreturn [{\n  json: {\n    candidate_id: body.candidate_id,\n    job_id:       body.job_id ?? null,\n    filename:     file.fileName ?? 'cv.pdf',\n    mimeType:     file.mimeType ?? 'application/pdf',\n  },\n  binary: { data: file }\n}];"
+      }
+    },
+
+    {
+      "id": "node-3",
+      "name": "Convert Binary to Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [680, 300],
+      "parameters": {
+        "operation": "text",
+        "binaryPropertyName": "data",
+        "destinationKey": "resume_text"
+      }
+    },
+
+    {
+      "id": "node-4",
+      "name": "Prepare LLM Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300],
+      "parameters": {
+        "jsCode": "const resumeText  = $json.resume_text ?? '';\nconst prevNode    = $('Extract File Info').item.json;\n\nif (!resumeText || resumeText.trim().length < 50) {\n  throw new Error('CV text extraction produced insufficient content. Check the PDF quality.');\n}\n\nconst systemPrompt = `You are an expert HR data extractor. Extract structured candidate data from the CV text below.\nReturn ONLY valid JSON with exactly this schema — no prose, no markdown fences:\n{\n  \"full_name\":    \"string\",\n  \"email\":        \"string\",\n  \"phone\":        \"string or null\",\n  \"location\":     \"string or null\",\n  \"linkedin_url\": \"string or null\",\n  \"metadata\": {\n    \"skills\":           [\"array of technology/skill strings\"],\n    \"languages\":        [\"array of human language strings\"],\n    \"certifications\":   [\"array of certification name strings\"],\n    \"years_experience\": 0\n  }\n}`;\n\nreturn [{\n  json: {\n    candidate_id:  prevNode.candidate_id,\n    job_id:        prevNode.job_id,\n    filename:      prevNode.filename,\n    mimeType:      prevNode.mimeType,\n    resume_text:   resumeText,\n    system_prompt: systemPrompt,\n    user_prompt:   `CV Text:\\n${resumeText.slice(0, 12000)}`,\n  },\n  binary: $binary\n}];"
+      }
+    },
+
+    {
+      "id": "node-5",
+      "name": "LLM Chain — Profile Extraction",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [1160, 300],
+      "parameters": {
+        "prompt": {
+          "messages": [
+            {
+              "type": "SystemMessagePromptTemplate",
+              "message": "={{ $json.system_prompt }}"
+            },
+            {
+              "type": "HumanMessagePromptTemplate",
+              "message": "={{ $json.user_prompt }}"
+            }
+          ]
+        },
+        "batching": {
+          "batch": {
+            "batchSize": 1
+          }
+        }
+      }
+    },
+
+    {
+      "id": "node-5a",
+      "name": "DeepSeek Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [1060, 540],
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "deepseek-chat",
+          "mode": "list"
+        },
+        "options": {
+          "baseURL": "https://api.deepseek.com/v1",
+          "temperature": 0.1,
+          "maxTokens": 2048,
+          "responseFormat": "json_object"
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "REPLACE_WITH_DEEPSEEK_CREDENTIAL_ID",
+          "name": "DeepSeek API Key"
+        }
+      }
+    },
+
+    {
+      "id": "node-5b",
+      "name": "Structured Output Parser",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [1260, 540],
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"full_name\":    { \"type\": \"string\",  \"description\": \"Full name of the candidate\" },\n    \"email\":        { \"type\": \"string\",  \"description\": \"Primary email address\" },\n    \"phone\":        { \"type\": \"string\",  \"description\": \"Phone number or null\",  \"nullable\": true },\n    \"location\":     { \"type\": \"string\",  \"description\": \"City, Country or null\",   \"nullable\": true },\n    \"linkedin_url\": { \"type\": \"string\",  \"description\": \"LinkedIn profile URL or null\", \"nullable\": true },\n    \"metadata\": {\n      \"type\": \"object\",\n      \"properties\": {\n        \"skills\":           { \"type\": \"array\",  \"items\": { \"type\": \"string\" }, \"description\": \"Technical and soft skills\" },\n        \"languages\":        { \"type\": \"array\",  \"items\": { \"type\": \"string\" }, \"description\": \"Spoken languages\" },\n        \"certifications\":   { \"type\": \"array\",  \"items\": { \"type\": \"string\" }, \"description\": \"Professional certifications\" },\n        \"years_experience\": { \"type\": \"number\", \"description\": \"Total years of professional experience\" }\n      },\n      \"required\": [\"skills\", \"languages\", \"certifications\", \"years_experience\"]\n    }\n  },\n  \"required\": [\"full_name\", \"email\", \"metadata\"]\n}"
+      }
+    },
+
+    {
+      "id": "node-5c",
+      "name": "Gemini Fallback — Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [1360, 540],
+      "parameters": {
+        "modelName": "gemini-1.5-flash",
+        "options": {
+          "temperature": 0.1,
+          "maxOutputTokens": 2048
+        }
+      },
+      "credentials": {
+        "googleGeminiApi": {
+          "id": "REPLACE_WITH_GEMINI_CREDENTIAL_ID",
+          "name": "Google Gemini API Key"
+        }
+      },
+      "notes": "FALLBACK: Connect this node's output to the LLM Chain 'ai_languageModel' input as a fallback. n8n tries primary model first; if it fails, it uses fallback models in order."
+    },
+
+    {
+      "id": "node-6",
+      "name": "Parse & Enrich Profile",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1400, 300],
+      "parameters": {
+        "jsCode": "// LLM Chain with Structured Output Parser returns parsed JSON directly in $json.output\nlet profile;\ntry {\n  profile = typeof $json.output === 'string' ? JSON.parse($json.output) : $json.output;\n} catch (e) {\n  throw new Error(`Failed to parse LLM structured output: ${e.message}. Raw: ${JSON.stringify($json.output)}`);\n}\n\nif (!profile?.full_name || !profile?.email) {\n  throw new Error(`LLM returned incomplete profile. Missing full_name or email. Got: ${JSON.stringify(profile)}`);\n}\n\nconst prev        = $('Prepare LLM Prompt').item.json;\nconst resumeText  = prev.resume_text;\n\n// Build rich text blob for embedding (respects text-embedding-004 token budget ~2048 tokens)\nconst textForEmbedding = [\n  profile.full_name,\n  profile.location,\n  profile.metadata?.skills?.slice(0, 20).join(', '),\n  profile.metadata?.certifications?.slice(0, 10).join(', '),\n  profile.metadata?.languages?.join(', '),\n  resumeText?.slice(0, 2500),\n].filter(Boolean).join('\\n');\n\nreturn [{\n  json: {\n    candidate_id:       prev.candidate_id,\n    job_id:             prev.job_id,\n    filename:           prev.filename,\n    mimeType:           prev.mimeType,\n    resume_text:        resumeText,\n    text_for_embedding: textForEmbedding,\n    full_name:          profile.full_name,\n    email:              profile.email,\n    phone:              profile.phone       ?? null,\n    location:           profile.location    ?? null,\n    linkedin_url:       profile.linkedin_url ?? null,\n    metadata:           profile.metadata,\n  },\n  binary: $('Prepare LLM Prompt').item.binary,\n}];"
+      }
+    },
+
+    {
+      "id": "node-7",
+      "name": "Google Gemini Embeddings",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsGoogleGemini",
+      "typeVersion": 1,
+      "position": [1640, 540],
+      "parameters": {
+        "modelName": "models/text-embedding-004",
+        "options": {}
+      },
+      "credentials": {
+        "googleGeminiApi": {
+          "id": "REPLACE_WITH_GEMINI_CREDENTIAL_ID",
+          "name": "Google Gemini API Key"
+        }
+      },
+      "notes": "text-embedding-004 → 768 dimensions. Connected via ai_embedding to the Generate Embedding HTTP node below. Since n8n embedding sub-nodes are designed for vector stores, we use the raw Gemini API call below but keep this node for visual architecture clarity."
+    },
+
+    {
+      "id": "node-8",
+      "name": "Generate Embedding — Gemini API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1640, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key={{ $env.GEMINI_API_KEY }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"models/text-embedding-004\",\n  \"content\": {\n    \"parts\": [\n      { \"text\": {{ JSON.stringify($json.text_for_embedding) }} }\n    ]\n  },\n  \"taskType\": \"RETRIEVAL_DOCUMENT\"\n}"
+      },
+      "notes": "Calls Gemini REST API directly with $env.GEMINI_API_KEY (env vars work in HTTP Request nodes). Returns { embedding: { values: number[768] } }."
+    },
+
+    {
+      "id": "node-9",
+      "name": "Extract Embedding Vector",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1880, 300],
+      "parameters": {
+        "jsCode": "// Gemini REST response: { embedding: { values: number[] } }\nconst values = $json.embedding?.values;\n\nif (!Array.isArray(values)) {\n  throw new Error(`Gemini embeddings API returned unexpected shape: ${JSON.stringify($json)}`);\n}\n\nif (values.length !== 768) {\n  throw new Error(`Expected 768-dim vector from text-embedding-004, got ${values.length} dims.`);\n}\n\nconst prev = $('Parse & Enrich Profile').item.json;\n\nreturn [{\n  json: {\n    ...prev,\n    embedding: values,\n  },\n  binary: $('Parse & Enrich Profile').item.binary,\n}];"
+      }
+    },
+
+    {
+      "id": "node-10",
+      "name": "Upload CV to Supabase Storage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2120, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/storage/v1/object/resumes/{{ $json.candidate_id }}/{{ $json.filename }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Content-Type",  "value": "={{ $json.mimeType }}" },
+            { "name": "x-upsert",      "value": "true" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data"
+      }
+    },
+
+    {
+      "id": "node-11",
+      "name": "Build Final Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2360, 300],
+      "parameters": {
+        "jsCode": "const prev        = $('Extract Embedding Vector').item.json;\nconst supabaseUrl = $env.SUPABASE_URL;\nconst resume_url  = `${supabaseUrl}/storage/v1/object/public/resumes/${prev.candidate_id}/${prev.filename}`;\n\nreturn [{\n  json: { ...prev, resume_url }\n}];"
+      }
+    },
+
+    {
+      "id": "node-12",
+      "name": "POST — ATS Multiplexor",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2600, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NEXT_APP_URL }}/api/webhooks/n8n",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-n8n-api-key", "value": "={{ $env.N8N_WEBHOOK_SECRET }}" },
+            { "name": "Content-Type",  "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"event\": \"cv.ingested\",\n  \"payload\": {\n    \"candidate_id\":    \"{{ $json.candidate_id }}\",\n    \"resume_url\":      \"{{ $json.resume_url }}\",\n    \"resume_filename\": \"{{ $json.filename }}\",\n    \"resume_text\":     {{ JSON.stringify($json.resume_text) }},\n    \"embedding\":       {{ JSON.stringify($json.embedding) }}\n  }\n}"
+      }
+    },
+
+    {
+      "id": "node-13",
+      "name": "Respond — Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2840, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"ok\": true,\n  \"candidate_id\":    \"{{ $('Build Final Payload').item.json.candidate_id }}\",\n  \"full_name\":       \"{{ $('Build Final Payload').item.json.full_name }}\",\n  \"embedding_model\": \"text-embedding-004\",\n  \"embedding_dims\":  768,\n  \"embedding_status\": \"ready\"\n}",
+        "options": { "responseCode": 200 }
+      }
+    },
+
+    {
+      "id": "node-14",
+      "name": "Respond — Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2840, 480],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"ok\": false,\n  \"error\": \"{{ $json.error?.message ?? 'Unknown pipeline error' }}\",\n  \"node\":  \"{{ $json.error?.node ?? 'unknown' }}\"\n}",
+        "options": { "responseCode": 500 }
+      }
+    },
+
+    {
+      "id": "node-15",
+      "name": "⚠️ DeepSeek Failed — Try Gemini",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 560],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={{ $env.GEMINI_API_KEY }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"generationConfig\": { \"responseMimeType\": \"application/json\", \"temperature\": 0.1 },\n  \"contents\": [{\n    \"role\": \"user\",\n    \"parts\": [{ \"text\": {{ JSON.stringify($('Prepare LLM Prompt').item.json.system_prompt + '\\n\\n' + $('Prepare LLM Prompt').item.json.user_prompt) }} }]\n  }]\n}"
+      }
+    },
+
+    {
+      "id": "node-16",
+      "name": "Parse Gemini Fallback Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1400, 560],
+      "parameters": {
+        "jsCode": "const rawText = $json.candidates?.[0]?.content?.parts?.[0]?.text;\nif (!rawText) throw new Error('Gemini fallback also failed to return a response.');\n\nconst profile = JSON.parse(rawText);\nconst prev    = $('Prepare LLM Prompt').item.json;\nconst resumeText = prev.resume_text;\n\nconst textForEmbedding = [\n  profile.full_name,\n  profile.location,\n  profile.metadata?.skills?.slice(0, 20).join(', '),\n  profile.metadata?.certifications?.slice(0, 10).join(', '),\n  profile.metadata?.languages?.join(', '),\n  resumeText?.slice(0, 2500),\n].filter(Boolean).join('\\n');\n\nreturn [{\n  json: {\n    candidate_id:       prev.candidate_id,\n    job_id:             prev.job_id,\n    filename:           prev.filename,\n    mimeType:           prev.mimeType,\n    resume_text:        resumeText,\n    text_for_embedding: textForEmbedding,\n    full_name:          profile.full_name,\n    email:              profile.email,\n    phone:              profile.phone       ?? null,\n    location:           profile.location    ?? null,\n    linkedin_url:       profile.linkedin_url ?? null,\n    metadata:           profile.metadata,\n    llm_provider:      'gemini-fallback',\n  },\n  binary: $('Prepare LLM Prompt').item.binary,\n}];"
+      }
+    },
+
+    {
+      "id": "node-17",
+      "name": "Merge LLM Paths",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1640, 420],
+      "parameters": {
+        "mode": "chooseBranch",
+        "chooseBranchOptions": {
+          "chooseBranch": "firstDataFound"
+        }
+      }
+    }
+  ],
+
+  "connections": {
+    "Webhook Trigger": {
+      "main": [[ { "node": "Extract File Info", "type": "main", "index": 0 } ]]
+    },
+    "Extract File Info": {
+      "main": [[ { "node": "Convert Binary to Text", "type": "main", "index": 0 } ]]
+    },
+    "Convert Binary to Text": {
+      "main": [[ { "node": "Prepare LLM Prompt", "type": "main", "index": 0 } ]]
+    },
+    "Prepare LLM Prompt": {
+      "main": [[ { "node": "LLM Chain — Profile Extraction", "type": "main", "index": 0 } ]]
+    },
+
+    "DeepSeek Chat Model": {
+      "ai_languageModel": [[ { "node": "LLM Chain — Profile Extraction", "type": "ai_languageModel", "index": 0 } ]]
+    },
+    "Gemini Fallback — Chat Model": {
+      "ai_languageModel": [[ { "node": "LLM Chain — Profile Extraction", "type": "ai_languageModel", "index": 1 } ]]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [[ { "node": "LLM Chain — Profile Extraction", "type": "ai_outputParser", "index": 0 } ]]
+    },
+
+    "LLM Chain — Profile Extraction": {
+      "main": [[ { "node": "Parse & Enrich Profile", "type": "main", "index": 0 } ]],
+      "error": [[ { "node": "⚠️ DeepSeek Failed — Try Gemini", "type": "main", "index": 0 } ]]
+    },
+
+    "Parse & Enrich Profile": {
+      "main": [[ { "node": "Merge LLM Paths", "type": "main", "index": 0 } ]]
+    },
+
+    "⚠️ DeepSeek Failed — Try Gemini": {
+      "main": [[ { "node": "Parse Gemini Fallback Output", "type": "main", "index": 0 } ]]
+    },
+    "Parse Gemini Fallback Output": {
+      "main": [[ { "node": "Merge LLM Paths", "type": "main", "index": 1 } ]]
+    },
+
+    "Merge LLM Paths": {
+      "main": [[ { "node": "Generate Embedding — Gemini API", "type": "main", "index": 0 } ]]
+    },
+
+    "Google Gemini Embeddings": {
+      "ai_embedding": [[ { "node": "Generate Embedding — Gemini API", "type": "ai_embedding", "index": 0 } ]]
+    },
+
+    "Generate Embedding — Gemini API": {
+      "main": [[ { "node": "Extract Embedding Vector", "type": "main", "index": 0 } ]]
+    },
+    "Extract Embedding Vector": {
+      "main": [[ { "node": "Upload CV to Supabase Storage", "type": "main", "index": 0 } ]]
+    },
+    "Upload CV to Supabase Storage": {
+      "main": [[ { "node": "Build Final Payload", "type": "main", "index": 0 } ]]
+    },
+    "Build Final Payload": {
+      "main": [[ { "node": "POST — ATS Multiplexor", "type": "main", "index": 0 } ]]
+    },
+    "POST — ATS Multiplexor": {
+      "main": [[ { "node": "Respond — Success", "type": "main", "index": 0 } ]]
+    }
+  },
+
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+
+  "staticData": null,
+
+  "meta": {
+    "instanceId": "ats-recruitment-platform",
+    "_readme": {
+      "architecture": "LangChain Advanced AI (n8n native nodes)",
+      "llm_chain": {
+        "primary_model":  "DeepSeek deepseek-chat (OpenAI-compatible via lmChatOpenAi)",
+        "fallback_model": "Google Gemini 1.5 Flash (lmChatGoogleGemini)",
+        "output_parser":  "Structured Output Parser (JSON schema — Zod-equivalent)",
+        "fallback_mechanism": "LLM Chain error output → Gemini HTTP fallback → Merge node"
+      },
+      "embeddings": {
+        "node_type":   "@n8n/n8n-nodes-langchain.embeddingsGoogleGemini (sub-node, visual ref)",
+        "api_call":    "HTTP Request → Gemini text-embedding-004 REST API",
+        "dimensions":  768,
+        "task_type":   "RETRIEVAL_DOCUMENT"
+      },
+      "credentials_required": [
+        "openAiApi credential with DeepSeek API key → replace REPLACE_WITH_DEEPSEEK_CREDENTIAL_ID",
+        "googleGeminiApi credential → replace REPLACE_WITH_GEMINI_CREDENTIAL_ID"
+      ],
+      "env_vars_required": [
+        "GEMINI_API_KEY",
+        "SUPABASE_URL",
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "NEXT_APP_URL",
+        "N8N_WEBHOOK_SECRET"
+      ]
+    }
+  }
+}

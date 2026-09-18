@@ -1,0 +1,23 @@
+{
+  "harness": "antigravity-cli-harness",
+  "version": "1.0.0",
+  "project": "AI Recruitment Platform (ATS)",
+  "activePlugin": "recruitment-plugin",
+  "pluginPath": ".agents/plugins/recruitment-plugin",
+  "intensityLevel": "lite",
+  "executionMode": "parallel",
+  "agentMap": {
+    "db-agent":        ".agents/plugins/recruitment-plugin/agents/db-agent/agent.json",
+    "developer-agent": ".agents/plugins/recruitment-plugin/agents/developer-agent/agent.json",
+    "qa-agent":        ".agents/plugins/recruitment-plugin/agents/qa-agent/agent.json"
+  },
+  "skillMap": {
+    "db-skill":        ".agents/plugins/recruitment-plugin/skills/db-skill/skill.json",
+    "developer-skill": ".agents/plugins/recruitment-plugin/skills/developer-skill/skill.json",
+    "qa-skill":        ".agents/plugins/recruitment-plugin/skills/qa-skill/skill.json"
+  },
+  "startupRules": {
+    "caveman": { "skill": "caveman", "intensity": "lite" },
+    "stack": "Next.js (App Router) + Tailwind CSS + Supabase/pgvector + n8n"
+  }
+}

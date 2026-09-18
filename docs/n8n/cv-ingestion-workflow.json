@@ -1,0 +1,219 @@
+{
+  "name": "ATS — CV Ingestion Pipeline (Gemini)",
+  "nodes": [
+    {
+      "id": "1",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "parameters": {
+        "path": "ats-cv-ingest",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      }
+    },
+    {
+      "id": "2",
+      "name": "Extract File Info",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300],
+      "parameters": {
+        "jsCode": "const file = $binary.data;\nconst body = $json;\nreturn [{\n  json: {\n    candidate_id: body.candidate_id,\n    job_id: body.job_id ?? null,\n    filename: file.fileName,\n    mimeType: file.mimeType,\n  },\n  binary: { data: file }\n}];"
+      }
+    },
+    {
+      "id": "3",
+      "name": "Convert Binary to Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [680, 300],
+      "parameters": {
+        "operation": "text",
+        "binaryPropertyName": "data",
+        "destinationKey": "resume_text"
+      }
+    },
+    {
+      "id": "4",
+      "name": "LLM Extract Profile",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={{ $env.GEMINI_API_KEY }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"generationConfig\": {\n    \"responseMimeType\": \"application/json\",\n    \"temperature\": 0.1\n  },\n  \"contents\": [\n    {\n      \"role\": \"user\",\n      \"parts\": [\n        {\n          \"text\": \"You are an expert HR data extractor. Extract structured candidate data from the following CV text and return ONLY valid JSON — no prose, no markdown fences — matching this exact schema:\\n{\\n  \\\"full_name\\\": \\\"string\\\",\\n  \\\"email\\\": \\\"string\\\",\\n  \\\"phone\\\": \\\"string or null\\\",\\n  \\\"location\\\": \\\"string or null\\\",\\n  \\\"linkedin_url\\\": \\\"string or null\\\",\\n  \\\"metadata\\\": {\\n    \\\"skills\\\": [\\\"array of strings\\\"],\\n    \\\"languages\\\": [\\\"array of strings\\\"],\\n    \\\"certifications\\\": [\\\"array of strings\\\"],\\n    \\\"years_experience\\\": 0\\n  }\\n}\\n\\nCV text:\\n\" + $json.resume_text\n        }\n      ]\n    }\n  ]\n}"
+      }
+    },
+    {
+      "id": "5",
+      "name": "Parse LLM JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300],
+      "parameters": {
+        "jsCode": "// Gemini returns: candidates[0].content.parts[0].text\n// With responseMimeType: 'application/json', the text is already valid JSON.\nconst rawText = $json.candidates[0].content.parts[0].text;\nconst profile = JSON.parse(rawText);\n\nconst prevNode   = $('Extract File Info').item.json;\nconst resumeText = $('Convert Binary to Text').item.json.resume_text;\n\n// Build a rich text blob for embedding (keep within token budget)\nconst textForEmbedding = [\n  profile.full_name,\n  profile.location,\n  profile.metadata?.skills?.join(', '),\n  profile.metadata?.certifications?.join(', '),\n  profile.metadata?.languages?.join(', '),\n  resumeText?.slice(0, 3000)\n].filter(Boolean).join('\\n');\n\nreturn [{\n  json: {\n    candidate_id:       prevNode.candidate_id,\n    job_id:             prevNode.job_id,\n    filename:           prevNode.filename,\n    mimeType:           prevNode.mimeType,\n    resume_text:        resumeText,\n    text_for_embedding: textForEmbedding,\n    ...profile\n  }\n}];"
+      }
+    },
+    {
+      "id": "6",
+      "name": "Generate Embedding",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key={{ $env.GEMINI_API_KEY }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"models/text-embedding-004\",\n  \"content\": {\n    \"parts\": [\n      { \"text\": {{ JSON.stringify($json.text_for_embedding) }} }\n    ]\n  },\n  \"taskType\": \"RETRIEVAL_DOCUMENT\"\n}"
+      }
+    },
+    {
+      "id": "7",
+      "name": "Extract Embedding Vector",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 300],
+      "parameters": {
+        "jsCode": "// Gemini Embeddings API returns: { embedding: { values: number[] } }\n// text-embedding-004 → 768 dimensions\n// Supabase column must be vector(768) — see migration in docs/n8n/migration_vector_768.sql\nconst embedding = $json.embedding.values;\nconst prev = $('Parse LLM JSON').item.json;\n\nif (!Array.isArray(embedding) || embedding.length !== 768) {\n  throw new Error(`Unexpected embedding shape: got ${embedding?.length} dims, expected 768`);\n}\n\nreturn [{ json: { ...prev, embedding } }];"
+      }
+    },
+    {
+      "id": "8",
+      "name": "Upload CV to Supabase Storage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1780, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/storage/v1/object/resumes/{{ $json.candidate_id }}/{{ $json.filename }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Content-Type",  "value": "={{ $json.mimeType }}" },
+            { "name": "x-upsert",      "value": "true" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data"
+      }
+    },
+    {
+      "id": "9",
+      "name": "Build Final Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 300],
+      "parameters": {
+        "jsCode": "const prev = $('Extract Embedding Vector').item.json;\nconst supabaseUrl = $env.SUPABASE_URL;\nconst resume_url = `${supabaseUrl}/storage/v1/object/public/resumes/${prev.candidate_id}/${prev.filename}`;\n\nreturn [{\n  json: {\n    ...prev,\n    resume_url\n  }\n}];"
+      }
+    },
+    {
+      "id": "10",
+      "name": "POST to ATS Multiplexor",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2220, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NEXT_APP_URL }}/api/webhooks/n8n",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "x-n8n-api-key", "value": "={{ $env.N8N_WEBHOOK_SECRET }}" },
+            { "name": "Content-Type",  "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"event\": \"cv.ingested\",\n  \"payload\": {\n    \"candidate_id\":    \"{{ $json.candidate_id }}\",\n    \"resume_url\":      \"{{ $json.resume_url }}\",\n    \"resume_filename\": \"{{ $json.filename }}\",\n    \"resume_text\":     {{ JSON.stringify($json.resume_text) }},\n    \"embedding\":       {{ JSON.stringify($json.embedding) }}\n  }\n}"
+      }
+    },
+    {
+      "id": "11",
+      "name": "Respond — Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2440, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"ok\": true, \"candidate_id\": \"{{ $('Build Final Payload').item.json.candidate_id }}\", \"embedding_status\": \"ready\", \"embedding_model\": \"text-embedding-004\", \"dims\": 768 }",
+        "options": { "responseCode": 200 }
+      }
+    },
+    {
+      "id": "12",
+      "name": "Respond — Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2440, 480],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"ok\": false, \"error\": \"{{ $json.error.message }}\" }",
+        "options": { "responseCode": 500 }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [[ { "node": "Extract File Info", "type": "main", "index": 0 } ]]
+    },
+    "Extract File Info": {
+      "main": [[ { "node": "Convert Binary to Text", "type": "main", "index": 0 } ]]
+    },
+    "Convert Binary to Text": {
+      "main": [[ { "node": "LLM Extract Profile", "type": "main", "index": 0 } ]]
+    },
+    "LLM Extract Profile": {
+      "main": [[ { "node": "Parse LLM JSON", "type": "main", "index": 0 } ]]
+    },
+    "Parse LLM JSON": {
+      "main": [[ { "node": "Generate Embedding", "type": "main", "index": 0 } ]]
+    },
+    "Generate Embedding": {
+      "main": [[ { "node": "Extract Embedding Vector", "type": "main", "index": 0 } ]]
+    },
+    "Extract Embedding Vector": {
+      "main": [[ { "node": "Upload CV to Supabase Storage", "type": "main", "index": 0 } ]]
+    },
+    "Upload CV to Supabase Storage": {
+      "main": [[ { "node": "Build Final Payload", "type": "main", "index": 0 } ]]
+    },
+    "Build Final Payload": {
+      "main": [[ { "node": "POST to ATS Multiplexor", "type": "main", "index": 0 } ]]
+    },
+    "POST to ATS Multiplexor": {
+      "main": [[ { "node": "Respond — Success", "type": "main", "index": 0 } ]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "meta": {
+    "instanceId": "ats-recruitment-platform"
+  }
+}
