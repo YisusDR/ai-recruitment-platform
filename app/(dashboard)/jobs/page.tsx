@@ -11,6 +11,7 @@ import { Button }           from '@/components/ui/Button'
 import { Card, CardBody }   from '@/components/ui/Card'
 import { EmptyState }       from '@/components/ui/EmptyState'
 import { formatDate, truncate } from '@/lib/utils'
+import { mockStore } from '@/lib/mock/store'
 import type { JobRow, JobStatus } from '@/lib/supabase/types'
 
 // ── Stat card data derived from jobs list ───────────────────────────────────
@@ -50,17 +51,34 @@ function PlusIcon() {
   )
 }
 
+import { cookies } from 'next/headers'
+
 // ── Page ────────────────────────────────────────────────────────────────────
 
 export default async function JobsPage() {
-  const supabase = await createClient()
+  const cookieStore = await cookies()
+  const isDemo = cookieStore.has('ats_demo_user')
 
-  const { data: jobs, error } = await supabase
-    .from('jobs')
-    .select('*')
-    .order('created_at', { ascending: false })
+  let jobList: JobRow[] = []
 
-  const jobList: JobRow[] = jobs ?? []
+  if (!isDemo) {
+    try {
+      const supabase = await createClient()
+      const { data: jobs, error } = await supabase
+        .from('jobs')
+        .select('*')
+        .order('created_at', { ascending: false })
+
+      jobList = (jobs && jobs.length > 0) ? jobs : []
+    } catch (_err) {
+      // Supabase failed
+    }
+  }
+
+  if (jobList.length === 0) {
+    jobList = mockStore.getJobs()
+  }
+
   const stats = buildStats(jobList)
 
   return (
@@ -93,13 +111,6 @@ export default async function JobsPage() {
           </Card>
         ))}
       </div>
-
-      {/* ── Error state ── */}
-      {error && (
-        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          Error al cargar vacantes: {error.message}
-        </div>
-      )}
 
       {/* ── Jobs table ── */}
       <Card>

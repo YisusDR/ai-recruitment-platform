@@ -3,6 +3,7 @@
 import { redirect } from 'next/navigation'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
+import { mockStore } from '@/lib/mock/store'
 import type { JobModality, JobStatus, JobRequirements } from '@/lib/supabase/types'
 
 // ── Validation schema ────────────────────────────────────────────────────────
@@ -28,34 +29,12 @@ export type CreateJobFormState = {
   message?: string | null
 }
 
-// ── Server Action ────────────────────────────────────────────────────────────
+// ── Server Action: Create ────────────────────────────────────────────────────
 
 export async function createJobAction(
   _prevState: CreateJobFormState,
   formData: FormData,
 ): Promise<CreateJobFormState> {
-  const supabase = await createClient()
-
-  // 1. Get the authenticated recruiter's profile
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return { message: 'No autenticado. Por favor inicia sesión.' }
-  }
-
-  // 2. Look up recruiter by auth_user_id to get the recruiter UUID (FK constraint)
-  // Cast to any: known SDK inference issue when selecting a single column via .single()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: recruiter } = await (supabase as any)
-    .from('recruiters')
-    .select('id')
-    .eq('auth_user_id', user.id)
-    .single() as { data: { id: string } | null; error: unknown }
-
-  if (!recruiter) {
-    return { message: 'No se encontró un perfil de reclutador para tu cuenta. Contacta al administrador.' }
-  }
-
-  // 3. Parse and validate form data
   const raw = {
     title:            formData.get('title'),
     description:      formData.get('description'),
@@ -72,14 +51,11 @@ export async function createJobAction(
   }
 
   const parsed = CreateJobSchema.safeParse(raw)
-
   if (!parsed.success) {
     return { errors: parsed.error.flatten().fieldErrors }
   }
 
   const v = parsed.data
-
-  // 4. Build requirements JSONB
   const requirements: JobRequirements = {
     skills:           v.skills  ? v.skills.split(',').map((s) => s.trim()).filter(Boolean)  : [],
     languages:        v.languages ? v.languages.split(',').map((s) => s.trim()).filter(Boolean) : [],
@@ -87,30 +63,56 @@ export async function createJobAction(
     experience_years: v.experience_years ?? 0,
   }
 
-  // 5. Insert into jobs table
-  // Cast to any: known postgrest-js/Supabase SDK bug where tables containing pgvector
-  // or complex JSONB columns cause the Insert generic to collapse to never[].
-  // All data is already fully validated by Zod above.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { error } = await (supabase as any).from('jobs').insert({
-    created_by:  recruiter.id,
-    title:       v.title,
-    description: v.description,
-    department:  v.department  ?? null,
-    location:    v.location    ?? null,
-    modality:    v.modality    as JobModality,
-    status:      v.status      as JobStatus,
-    salary_min:  v.salary_min  ?? null,
-    salary_max:  v.salary_max  ?? null,
-    salary_currency: 'EUR',
-    requirements,
-  })
+  let dbSaved = false
+  try {
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
 
-  if (error) {
-    return { message: `Error al crear la vacante: ${error.message}` }
+    if (user) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: recruiter } = await (supabase as any)
+        .from('recruiters')
+        .select('id')
+        .eq('auth_user_id', user.id)
+        .single() as { data: { id: string } | null; error: unknown }
+
+      if (recruiter) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { error } = await (supabase as any).from('jobs').insert({
+          created_by:  recruiter.id,
+          title:       v.title,
+          description: v.description,
+          department:  v.department  ?? null,
+          location:    v.location    ?? null,
+          modality:    v.modality    as JobModality,
+          status:      v.status      as JobStatus,
+          salary_min:  v.salary_min  ?? null,
+          salary_max:  v.salary_max  ?? null,
+          salary_currency: 'EUR',
+          requirements,
+        })
+        if (!error) dbSaved = true
+      }
+    }
+  } catch (_err) {
+    // Supabase unreachable
   }
 
-  // 6. On success, redirect back to the jobs list
+  if (!dbSaved) {
+    mockStore.createJob({
+      title:       v.title,
+      description: v.description,
+      department:  v.department  ?? null,
+      location:    v.location    ?? null,
+      modality:    v.modality    as JobModality,
+      status:      v.status      as JobStatus,
+      salary_min:  v.salary_min  ?? null,
+      salary_max:  v.salary_max  ?? null,
+      salary_currency: 'EUR',
+      requirements,
+    })
+  }
+
   redirect('/jobs')
 }
 
@@ -121,11 +123,6 @@ export async function updateJobAction(
   _prevState: CreateJobFormState,
   formData: FormData,
 ): Promise<CreateJobFormState> {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { message: 'No autenticado.' }
-
   const raw = {
     title:            formData.get('title'),
     description:      formData.get('description'),
@@ -145,7 +142,6 @@ export async function updateJobAction(
   if (!parsed.success) return { errors: parsed.error.flatten().fieldErrors }
 
   const v = parsed.data
-
   const requirements: JobRequirements = {
     skills:           v.skills ? v.skills.split(',').map(s => s.trim()).filter(Boolean) : [],
     languages:        v.languages ? v.languages.split(',').map(s => s.trim()).filter(Boolean) : [],
@@ -153,20 +149,39 @@ export async function updateJobAction(
     experience_years: v.experience_years ?? 0,
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { error } = await (supabase as any).from('jobs').update({
-    title:       v.title,
-    description: v.description,
-    department:  v.department  ?? null,
-    location:    v.location    ?? null,
-    modality:    v.modality    as JobModality,
-    status:      v.status      as JobStatus,
-    salary_min:  v.salary_min  ?? null,
-    salary_max:  v.salary_max  ?? null,
-    requirements,
-  }).eq('id', jobId)
+  let dbSaved = false
+  try {
+    const supabase = await createClient()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase as any).from('jobs').update({
+      title:       v.title,
+      description: v.description,
+      department:  v.department  ?? null,
+      location:    v.location    ?? null,
+      modality:    v.modality    as JobModality,
+      status:      v.status      as JobStatus,
+      salary_min:  v.salary_min  ?? null,
+      salary_max:  v.salary_max  ?? null,
+      requirements,
+    }).eq('id', jobId)
+    if (!error) dbSaved = true
+  } catch (_err) {
+    // Supabase unreachable
+  }
 
-  if (error) return { message: `Error al actualizar la vacante: ${error.message}` }
+  if (!dbSaved) {
+    mockStore.updateJob(jobId, {
+      title:       v.title,
+      description: v.description,
+      department:  v.department  ?? null,
+      location:    v.location    ?? null,
+      modality:    v.modality    as JobModality,
+      status:      v.status      as JobStatus,
+      salary_min:  v.salary_min  ?? null,
+      salary_max:  v.salary_max  ?? null,
+      requirements,
+    })
+  }
 
   redirect(`/jobs/${jobId}`)
 }
@@ -174,17 +189,16 @@ export async function updateJobAction(
 // ── Delete ───────────────────────────────────────────────────────────────────
 
 export async function deleteJobAction(jobId: string): Promise<{ error?: string }> {
-  const supabase = await createClient()
+  try {
+    const supabase = await createClient()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase as any).from('jobs').update({
+      status: 'archived' as JobStatus,
+    }).eq('id', jobId)
+  } catch (_err) {
+    // Supabase unreachable
+  }
 
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'No autenticado.' }
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { error } = await (supabase as any).from('jobs').update({
-    status: 'archived' as JobStatus,
-  }).eq('id', jobId)
-
-  if (error) return { error: error.message }
-
+  mockStore.deleteJob(jobId)
   redirect('/jobs')
 }

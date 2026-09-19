@@ -41,29 +41,55 @@ export function TopBar() {
 
   useEffect(() => {
     async function loadUser() {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (user) {
-        // Try to get recruiter name
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { data: recruiter } = await (supabase as any)
-          .from('recruiters')
-          .select('full_name')
-          .eq('auth_user_id', user.id)
-          .maybeSingle() as { data: { full_name: string } | null }
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (user) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: recruiter } = await (supabase as any)
+            .from('recruiters')
+            .select('full_name')
+            .eq('auth_user_id', user.id)
+            .maybeSingle() as { data: { full_name: string } | null }
 
-        const name = recruiter?.full_name ?? user.user_metadata?.full_name ?? user.email ?? 'Usuario'
-        setUserName(name)
-        setUserInitial(name.charAt(0).toUpperCase())
+          const name = recruiter?.full_name ?? user.user_metadata?.full_name ?? user.email ?? 'Usuario'
+          setUserName(name)
+          setUserInitial(name.charAt(0).toUpperCase())
+          return
+        }
+      } catch (_err) {
+        // network/Supabase down
       }
+
+      // Check for demo user cookie fallback
+      if (typeof document !== 'undefined') {
+        const match = document.cookie.match(/ats_demo_user=([^;]+)/)
+        if (match) {
+          try {
+            const demoUser = JSON.parse(decodeURIComponent(match[1]))
+            setUserName(demoUser.name || 'Admin Dev')
+            setUserInitial((demoUser.name || 'A').charAt(0).toUpperCase())
+            return
+          } catch (_e) {
+            // ignore
+          }
+        }
+      }
+
+      setUserName('Admin Demo')
+      setUserInitial('A')
     }
     loadUser()
   }, [supabase])
 
   const handleLogout = async () => {
     setLoggingOut(true)
-    await supabase.auth.signOut()
-    router.push('/login')
-    router.refresh()
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' })
+      await supabase.auth.signOut()
+    } catch (_err) {
+      // ignore
+    }
+    window.location.href = '/login'
   }
 
   return (

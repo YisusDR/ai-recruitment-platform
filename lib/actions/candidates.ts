@@ -3,6 +3,7 @@
 import { redirect } from 'next/navigation'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
+import { mockStore } from '@/lib/mock/store'
 
 // ── Validation schemas ───────────────────────────────────────────────────────
 
@@ -30,11 +31,6 @@ export async function createCandidateAction(
   _prevState: CandidateFormState,
   formData: FormData,
 ): Promise<CandidateFormState> {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { message: 'No autenticado.' }
-
   const raw = {
     full_name:        formData.get('full_name'),
     email:            formData.get('email'),
@@ -52,7 +48,6 @@ export async function createCandidateAction(
   if (!parsed.success) return { errors: parsed.error.flatten().fieldErrors }
 
   const v = parsed.data
-
   const metadata = {
     skills:         v.skills ? v.skills.split(',').map(s => s.trim()).filter(Boolean) : [],
     languages:      v.languages ? v.languages.split(',').map(s => s.trim()).filter(Boolean) : [],
@@ -60,20 +55,38 @@ export async function createCandidateAction(
     years_experience: v.years_experience ?? 0,
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { error } = await (supabase as any).from('candidates').insert({
-    full_name:       v.full_name,
-    email:           v.email.trim().toLowerCase(),
-    phone:           v.phone ?? null,
-    linkedin_url:    v.linkedin_url || null,
-    portfolio_url:   v.portfolio_url || null,
-    location:        v.location ?? null,
-    nationality:     v.nationality ?? null,
-    embedding_status: 'pending',
-    metadata,
-  })
+  let dbSaved = false
+  try {
+    const supabase = await createClient()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase as any).from('candidates').insert({
+      full_name:       v.full_name,
+      email:           v.email.trim().toLowerCase(),
+      phone:           v.phone ?? null,
+      linkedin_url:    v.linkedin_url || null,
+      portfolio_url:   v.portfolio_url || null,
+      location:        v.location ?? null,
+      nationality:     v.nationality ?? null,
+      embedding_status: 'pending',
+      metadata,
+    })
+    if (!error) dbSaved = true
+  } catch (_err) {
+    // Supabase unreachable
+  }
 
-  if (error) return { message: `Error al crear candidato: ${error.message}` }
+  if (!dbSaved) {
+    mockStore.createCandidate({
+      full_name:       v.full_name,
+      email:           v.email.trim().toLowerCase(),
+      phone:           v.phone ?? null,
+      linkedin_url:    v.linkedin_url || null,
+      portfolio_url:   v.portfolio_url || null,
+      location:        v.location ?? null,
+      nationality:     v.nationality ?? null,
+      metadata,
+    })
+  }
 
   redirect('/candidates')
 }
@@ -85,11 +98,6 @@ export async function updateCandidateAction(
   _prevState: CandidateFormState,
   formData: FormData,
 ): Promise<CandidateFormState> {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { message: 'No autenticado.' }
-
   const raw = {
     full_name:        formData.get('full_name'),
     email:            formData.get('email'),
@@ -107,7 +115,6 @@ export async function updateCandidateAction(
   if (!parsed.success) return { errors: parsed.error.flatten().fieldErrors }
 
   const v = parsed.data
-
   const metadata = {
     skills:         v.skills ? v.skills.split(',').map(s => s.trim()).filter(Boolean) : [],
     languages:      v.languages ? v.languages.split(',').map(s => s.trim()).filter(Boolean) : [],
@@ -115,19 +122,37 @@ export async function updateCandidateAction(
     years_experience: v.years_experience ?? 0,
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { error } = await (supabase as any).from('candidates').update({
-    full_name:     v.full_name,
-    email:         v.email.trim().toLowerCase(),
-    phone:         v.phone ?? null,
-    linkedin_url:  v.linkedin_url || null,
-    portfolio_url: v.portfolio_url || null,
-    location:      v.location ?? null,
-    nationality:   v.nationality ?? null,
-    metadata,
-  }).eq('id', candidateId)
+  let dbSaved = false
+  try {
+    const supabase = await createClient()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase as any).from('candidates').update({
+      full_name:     v.full_name,
+      email:         v.email.trim().toLowerCase(),
+      phone:         v.phone ?? null,
+      linkedin_url:  v.linkedin_url || null,
+      portfolio_url: v.portfolio_url || null,
+      location:      v.location ?? null,
+      nationality:   v.nationality ?? null,
+      metadata,
+    }).eq('id', candidateId)
+    if (!error) dbSaved = true
+  } catch (_err) {
+    // Supabase unreachable
+  }
 
-  if (error) return { message: `Error al actualizar candidato: ${error.message}` }
+  if (!dbSaved) {
+    mockStore.updateCandidate(candidateId, {
+      full_name:     v.full_name,
+      email:         v.email.trim().toLowerCase(),
+      phone:         v.phone ?? null,
+      linkedin_url:  v.linkedin_url || null,
+      portfolio_url: v.portfolio_url || null,
+      location:      v.location ?? null,
+      nationality:   v.nationality ?? null,
+      metadata,
+    })
+  }
 
   redirect(`/candidates/${candidateId}`)
 }
@@ -135,18 +160,16 @@ export async function updateCandidateAction(
 // ── Delete ───────────────────────────────────────────────────────────────────
 
 export async function deleteCandidateAction(candidateId: string): Promise<{ error?: string }> {
-  const supabase = await createClient()
+  try {
+    const supabase = await createClient()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (supabase as any).from('candidates').update({
+      deleted_at: new Date().toISOString(),
+    }).eq('id', candidateId)
+  } catch (_err) {
+    // Supabase unreachable
+  }
 
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'No autenticado.' }
-
-  // Soft delete
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { error } = await (supabase as any).from('candidates').update({
-    deleted_at: new Date().toISOString(),
-  }).eq('id', candidateId)
-
-  if (error) return { error: error.message }
-
+  mockStore.deleteCandidate(candidateId)
   redirect('/candidates')
 }

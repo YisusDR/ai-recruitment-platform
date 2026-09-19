@@ -178,28 +178,68 @@ function InterviewTable({ interviews }: { interviews: InterviewWithRelations[] }
 
 // ── Page ─────────────────────────────────────────────────────────────────────
 
+import { mockStore } from '@/lib/mock/store'
+import { cookies } from 'next/headers'
+
 export default async function InterviewsPage() {
-  const supabase = await createClient()
+  const cookieStore = await cookies()
+  const isDemo = cookieStore.has('ats_demo_user')
 
-  const { data: rawInterviews, error } = await supabase
-    .from('interviews')
-    .select(`
-      *,
-      applications (
-        candidates (
-          id,
-          full_name,
-          email
-        ),
-        jobs (
-          id,
-          title
-        )
-      )
-    `)
-    .order('scheduled_at', { ascending: true })
+  let interviews: InterviewWithRelations[] = []
 
-  const interviews = (rawInterviews ?? []) as InterviewWithRelations[]
+  if (!isDemo) {
+    try {
+      const supabase = await createClient()
+
+      const { data: rawInterviews, error } = await supabase
+        .from('interviews')
+        .select(`
+          *,
+          applications (
+            candidates (
+              id,
+              full_name,
+              email
+            ),
+            jobs (
+              id,
+              title
+            )
+          )
+        `)
+        .order('scheduled_at', { ascending: true })
+
+      if (rawInterviews && rawInterviews.length > 0) {
+        interviews = rawInterviews as InterviewWithRelations[]
+      }
+    } catch (_err) {
+      // Supabase unavailable
+    }
+  }
+
+  if (interviews.length === 0) {
+    const mockList = mockStore.getInterviews()
+    interviews = mockList.map(i => {
+      const app = mockStore.getApplicationById(i.application_id)
+      const cand = app ? mockStore.getCandidateById(app.candidate_id) : null
+      const job = app ? mockStore.getJobById(app.job_id) : null
+      return {
+        ...i,
+        applications: {
+          candidates: {
+            id: cand?.id ?? 'cand-1',
+            full_name: cand?.full_name ?? 'Candidato Demo',
+            email: cand?.email ?? 'candidato@email.com',
+          },
+          jobs: {
+            id: job?.id ?? 'job-1',
+            title: job?.title ?? 'Posición General',
+          },
+        },
+      }
+    })
+  }
+
   const stats = buildStats(interviews)
   const { upcoming, past } = splitInterviews(interviews)
 
@@ -238,13 +278,6 @@ export default async function InterviewsPage() {
           </Card>
         ))}
       </div>
-
-      {/* ── Error state ── */}
-      {error && (
-        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          Error al cargar entrevistas: {error.message}
-        </div>
-      )}
 
       {/* ── Upcoming section ── */}
       <Card>

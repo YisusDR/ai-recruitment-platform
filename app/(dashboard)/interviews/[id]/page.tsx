@@ -72,34 +72,84 @@ function InfoRow({ label, children }: { label: string; children: React.ReactNode
   )
 }
 
+import { mockStore } from '@/lib/mock/store'
+import { cookies } from 'next/headers'
+
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default async function InterviewDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  const supabase = await createClient()
+  const cookieStore = await cookies()
+  const isDemo = cookieStore.has('ats_demo_user')
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: interview, error } = await (supabase as any)
-    .from('interviews')
-    .select(`
-      *,
-      applications (
-        candidates (id, full_name, email),
-        jobs (id, title)
-      )
-    `)
-    .eq('id', id)
-    .single() as { data: InterviewFull | null; error: unknown }
+  let interview: InterviewFull | null = null
+  let interviewer: Pick<RecruiterRow, 'id' | 'full_name' | 'email'> | null = null
 
-  if (error || !interview) notFound()
+  if (!isDemo) {
+    try {
+      const supabase = await createClient()
 
-  // Fetch interviewer info separately
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: interviewer } = await (supabase as any)
-    .from('recruiters')
-    .select('id, full_name, email')
-    .eq('id', interview.interviewer_id)
-    .single() as { data: Pick<RecruiterRow, 'id' | 'full_name' | 'email'> | null }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: dbInterview } = await (supabase as any)
+        .from('interviews')
+        .select(`
+          *,
+          applications (
+            candidates (id, full_name, email),
+            jobs (id, title)
+          )
+        `)
+        .eq('id', id)
+        .single() as { data: InterviewFull | null; error: unknown }
+
+      interview = dbInterview
+
+      if (interview) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: dbInterviewer } = await (supabase as any)
+          .from('recruiters')
+          .select('id, full_name, email')
+          .eq('id', interview.interviewer_id)
+          .single() as { data: Pick<RecruiterRow, 'id' | 'full_name' | 'email'> | null }
+        interviewer = dbInterviewer
+      }
+    } catch (_err) {
+      // Supabase unavailable
+    }
+  }
+
+  // Fallback to mock store
+  if (!interview) {
+    const mockI = mockStore.getInterviewById(id)
+    if (mockI) {
+      const app = mockStore.getApplicationById(mockI.application_id)
+      const cand = app ? mockStore.getCandidateById(app.candidate_id) : null
+      const mockJob = app ? mockStore.getJobById(app.job_id) : null
+      const rec = mockStore.getCurrentRecruiter()
+      interviewer = {
+        id: rec.id,
+        full_name: rec.full_name,
+        email: rec.email,
+      }
+      interview = {
+        ...mockI,
+        applications: {
+          candidates: {
+            id: cand?.id ?? 'cand-1',
+            full_name: cand?.full_name ?? 'Candidato',
+            email: cand?.email ?? 'candidato@email.com',
+          },
+          jobs: {
+            id: mockJob?.id ?? 'job-1',
+            title: mockJob?.title ?? 'Vacante',
+          },
+        },
+        recruiters: interviewer,
+      }
+    }
+  }
+
+  if (!interview) notFound()
 
   const candidate = interview.applications?.candidates
   const job = interview.applications?.jobs

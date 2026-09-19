@@ -21,18 +21,32 @@ function ArrowLeftIcon() {
   )
 }
 
+import { mockStore } from '@/lib/mock/store'
+
 export default async function EditJobPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  const supabase = await createClient()
+  let job: JobRow | null = null
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: job, error } = await (supabase as any)
-    .from('jobs')
-    .select('*')
-    .eq('id', id)
-    .single() as { data: JobRow | null; error: unknown }
+  try {
+    const supabase = await createClient()
 
-  if (error || !job) notFound()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: dbJob } = await (supabase as any)
+      .from('jobs')
+      .select('*')
+      .eq('id', id)
+      .single() as { data: JobRow | null; error: unknown }
+
+    job = dbJob
+  } catch (_err) {
+    // Supabase unavailable
+  }
+
+  if (!job) {
+    job = mockStore.getJobById(id)
+  }
+
+  if (!job) notFound()
 
   return (
     <div className="mx-auto max-w-3xl space-y-8 animate-slide-up">

@@ -84,26 +84,55 @@ function Avatar({ name }: { name: string }) {
   )
 }
 
+import { mockStore } from '@/lib/mock/store'
+import { cookies } from 'next/headers'
+
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default async function CandidatesPage() {
-  const supabase = await createClient()
+  const cookieStore = await cookies()
+  const isDemo = cookieStore.has('ats_demo_user')
 
-  // Fetch candidates + their latest application stage/score
-  const { data: rawCandidates, error } = await supabase
-    .from('candidates')
-    .select(`
-      *,
-      applications (
-        stage,
-        score,
-        job_id
-      )
-    `)
-    .is('deleted_at', null)
-    .order('created_at', { ascending: false })
+  let candidates: CandidateWithApplication[] = []
 
-  const candidates = (rawCandidates ?? []) as CandidateWithApplication[]
+  if (!isDemo) {
+    try {
+      const supabase = await createClient()
+
+      // Fetch candidates + their latest application stage/score
+      const { data: rawCandidates, error } = await supabase
+        .from('candidates')
+        .select(`
+          *,
+          applications (
+            stage,
+            score,
+            job_id
+          )
+        `)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false })
+
+      if (rawCandidates && rawCandidates.length > 0) {
+        candidates = rawCandidates as CandidateWithApplication[]
+      }
+    } catch (_err) {
+      // Supabase unavailable
+    }
+  }
+
+  if (candidates.length === 0) {
+    const mockList = mockStore.getCandidates()
+    candidates = mockList.map(c => ({
+      ...c,
+      applications: mockStore.getApplicationsByCandidate(c.id).map(a => ({
+        stage: a.stage,
+        score: a.score,
+        job_id: a.job_id,
+      })),
+    }))
+  }
+
   const stats = buildEmbeddingStats(candidates)
 
   return (
@@ -141,13 +170,6 @@ export default async function CandidatesPage() {
           </Card>
         ))}
       </div>
-
-      {/* ── Error state ── */}
-      {error && (
-        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          Error al cargar candidatos: {error.message}
-        </div>
-      )}
 
       {/* ── Candidates table ── */}
       <Card>

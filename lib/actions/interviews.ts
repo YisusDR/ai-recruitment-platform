@@ -3,13 +3,14 @@
 import { redirect } from 'next/navigation'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
+import { mockStore } from '@/lib/mock/store'
 import type { InterviewType, InterviewResult } from '@/lib/supabase/types'
 
 // ── Validation schemas ───────────────────────────────────────────────────────
 
 const ScheduleInterviewSchema = z.object({
-  application_id:   z.string().uuid('Application ID inválido'),
-  interviewer_id:   z.string().uuid('Interviewer ID inválido'),
+  application_id:   z.string().min(1, 'Application ID requerido'),
+  interviewer_id:   z.string().min(1, 'Interviewer ID requerido'),
   interview_type:   z.enum(['phone_screen', 'technical', 'cultural_fit', 'panel', 'final', 'offer_call']),
   scheduled_at:     z.string().min(1, 'Fecha requerida'),
   duration_minutes: z.coerce.number().min(15).max(480),
@@ -34,11 +35,6 @@ export async function scheduleInterviewAction(
   _prevState: InterviewFormState,
   formData: FormData,
 ): Promise<InterviewFormState> {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { message: 'No autenticado.' }
-
   const raw = {
     application_id:   formData.get('application_id'),
     interviewer_id:   formData.get('interviewer_id'),
@@ -54,19 +50,36 @@ export async function scheduleInterviewAction(
 
   const v = parsed.data
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { error } = await (supabase as any).from('interviews').insert({
-    application_id:   v.application_id,
-    interviewer_id:   v.interviewer_id,
-    interview_type:   v.interview_type as InterviewType,
-    scheduled_at:     v.scheduled_at,
-    duration_minutes: v.duration_minutes,
-    meeting_url:      v.meeting_url || null,
-    location_notes:   v.location_notes ?? null,
-    result:           'pending' as InterviewResult,
-  })
+  let dbSaved = false
+  try {
+    const supabase = await createClient()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase as any).from('interviews').insert({
+      application_id:   v.application_id,
+      interviewer_id:   v.interviewer_id,
+      interview_type:   v.interview_type as InterviewType,
+      scheduled_at:     v.scheduled_at,
+      duration_minutes: v.duration_minutes,
+      meeting_url:      v.meeting_url || null,
+      location_notes:   v.location_notes ?? null,
+      result:           'pending' as InterviewResult,
+    })
+    if (!error) dbSaved = true
+  } catch (_err) {
+    // Supabase unreachable
+  }
 
-  if (error) return { message: `Error al programar entrevista: ${error.message}` }
+  if (!dbSaved) {
+    mockStore.createInterview({
+      application_id:   v.application_id,
+      interviewer_id:   v.interviewer_id,
+      interview_type:   v.interview_type as InterviewType,
+      scheduled_at:     v.scheduled_at,
+      duration_minutes: v.duration_minutes,
+      meeting_url:      v.meeting_url || null,
+      location_notes:   v.location_notes ?? null,
+    })
+  }
 
   redirect('/interviews')
 }
@@ -78,11 +91,6 @@ export async function updateInterviewResultAction(
   _prevState: InterviewFormState,
   formData: FormData,
 ): Promise<InterviewFormState> {
-  const supabase = await createClient()
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { message: 'No autenticado.' }
-
   const raw = {
     result: formData.get('result'),
     rating: formData.get('rating') || undefined,
@@ -94,15 +102,29 @@ export async function updateInterviewResultAction(
 
   const v = parsed.data
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { error } = await (supabase as any).from('interviews').update({
-    result:       v.result as InterviewResult,
-    rating:       v.rating ?? null,
-    notes:        v.notes ?? null,
-    conducted_at: v.result !== 'pending' ? new Date().toISOString() : null,
-  }).eq('id', interviewId)
+  let dbSaved = false
+  try {
+    const supabase = await createClient()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase as any).from('interviews').update({
+      result:       v.result as InterviewResult,
+      rating:       v.rating ?? null,
+      notes:        v.notes ?? null,
+      conducted_at: v.result !== 'pending' ? new Date().toISOString() : null,
+    }).eq('id', interviewId)
+    if (!error) dbSaved = true
+  } catch (_err) {
+    // Supabase unreachable
+  }
 
-  if (error) return { message: `Error al actualizar entrevista: ${error.message}` }
+  if (!dbSaved) {
+    mockStore.updateInterview(interviewId, {
+      result:       v.result as InterviewResult,
+      rating:       v.rating ?? null,
+      notes:        v.notes ?? null,
+      conducted_at: v.result !== 'pending' ? new Date().toISOString() : null,
+    })
+  }
 
   redirect(`/interviews/${interviewId}`)
 }

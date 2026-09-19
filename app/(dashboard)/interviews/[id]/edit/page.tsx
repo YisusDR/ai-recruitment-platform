@@ -21,18 +21,32 @@ function ArrowLeftIcon() {
   )
 }
 
+import { mockStore } from '@/lib/mock/store'
+
 export default async function EditInterviewPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  const supabase = await createClient()
+  let interview: InterviewRow | null = null
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: interview, error } = await (supabase as any)
-    .from('interviews')
-    .select('*')
-    .eq('id', id)
-    .single() as { data: InterviewRow | null; error: unknown }
+  try {
+    const supabase = await createClient()
 
-  if (error || !interview) notFound()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: dbInterview } = await (supabase as any)
+      .from('interviews')
+      .select('*')
+      .eq('id', id)
+      .single() as { data: InterviewRow | null; error: unknown }
+
+    interview = dbInterview
+  } catch (_err) {
+    // Supabase unavailable
+  }
+
+  if (!interview) {
+    interview = mockStore.getInterviewById(id)
+  }
+
+  if (!interview) notFound()
 
   return (
     <div className="mx-auto max-w-2xl space-y-8 animate-slide-up">

@@ -26,39 +26,79 @@ function ArrowLeftIcon() {
   )
 }
 
+import { mockStore } from '@/lib/mock/store'
+import { cookies } from 'next/headers'
+
 export default async function ScheduleInterviewPage() {
-  const supabase = await createClient()
+  const cookieStore = await cookies()
+  const isDemo = cookieStore.has('ats_demo_user')
 
-  // Fetch active applications (not hired/rejected/withdrawn)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: rawApps } = await (supabase as any)
-    .from('applications')
-    .select(`
-      id, stage,
-      candidates (full_name),
-      jobs (title)
-    `)
-    .not('stage', 'in', '("hired","rejected","withdrawn")')
-    .order('created_at', { ascending: false }) as { data: ApplicationWithRelations[] | null }
+  let applications: { id: string; candidateName: string; jobTitle: string }[] = []
+  let recruiters: { id: string; fullName: string }[] = []
 
-  // Fetch active recruiters as interviewer options
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: rawRecruiters } = await (supabase as any)
-    .from('recruiters')
-    .select('id, full_name')
-    .eq('is_active', true)
-    .order('full_name') as { data: Pick<RecruiterRow, 'id' | 'full_name'>[] | null }
+  if (!isDemo) {
+    try {
+      const supabase = await createClient()
 
-  const applications = (rawApps ?? []).map(app => ({
-    id: app.id,
-    candidateName: app.candidates?.full_name ?? 'Candidato',
-    jobTitle: app.jobs?.title ?? 'Vacante',
-  }))
+      // Fetch active applications (not hired/rejected/withdrawn)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: rawApps } = await (supabase as any)
+        .from('applications')
+        .select(`
+          id, stage,
+          candidates (full_name),
+          jobs (title)
+        `)
+        .not('stage', 'in', '("hired","rejected","withdrawn")')
+        .order('created_at', { ascending: false }) as { data: ApplicationWithRelations[] | null }
 
-  const recruiters = (rawRecruiters ?? []).map(r => ({
-    id: r.id,
-    fullName: r.full_name,
-  }))
+      // Fetch active recruiters as interviewer options
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: rawRecruiters } = await (supabase as any)
+        .from('recruiters')
+        .select('id, full_name')
+        .eq('is_active', true)
+        .order('full_name') as { data: Pick<RecruiterRow, 'id' | 'full_name'>[] | null }
+
+      if (rawApps && rawApps.length > 0) {
+        applications = rawApps.map(app => ({
+          id: app.id,
+          candidateName: app.candidates?.full_name ?? 'Candidato',
+          jobTitle: app.jobs?.title ?? 'Vacante',
+        }))
+      }
+
+      if (rawRecruiters && rawRecruiters.length > 0) {
+        recruiters = rawRecruiters.map(r => ({
+          id: r.id,
+          fullName: r.full_name,
+        }))
+      }
+    } catch (_err) {
+      // Supabase unavailable
+    }
+  }
+
+  // Fallback to mock store
+  if (applications.length === 0) {
+    const mockApps = mockStore.getApplications()
+    applications = mockApps.map(app => {
+      const cand = mockStore.getCandidateById(app.candidate_id)
+      const job = mockStore.getJobById(app.job_id)
+      return {
+        id: app.id,
+        candidateName: cand?.full_name ?? 'Candidato Demo',
+        jobTitle: job?.title ?? 'Vacante Demo',
+      }
+    })
+  }
+
+  if (recruiters.length === 0) {
+    recruiters = mockStore.getRecruiters().map(r => ({
+      id: r.id,
+      fullName: r.full_name,
+    }))
+  }
 
   return (
     <div className="mx-auto max-w-3xl space-y-8 animate-slide-up">

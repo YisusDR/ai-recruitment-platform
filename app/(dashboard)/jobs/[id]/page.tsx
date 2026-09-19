@@ -63,35 +63,74 @@ function InfoRow({ label, children }: { label: string; children: React.ReactNode
 
 // ── Page ─────────────────────────────────────────────────────────────────────
 
+import { mockStore } from '@/lib/mock/store'
+
+import { cookies } from 'next/headers'
+
 export default async function JobDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  const supabase = await createClient()
+  const cookieStore = await cookies()
+  const isDemo = cookieStore.has('ats_demo_user')
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: job, error } = await (supabase as any)
-    .from('jobs')
-    .select('*')
-    .eq('id', id)
-    .single() as { data: JobRow | null; error: unknown }
+  let job: JobRow | null = null
+  let apps: ApplicationWithCandidate[] = []
 
-  if (error || !job) notFound()
+  if (!isDemo) {
+    try {
+      const supabase = await createClient()
 
-  // Fetch applications for this job
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: rawApps } = await (supabase as any)
-    .from('applications')
-    .select(`
-      *,
-      candidates (
-        id,
-        full_name,
-        email
-      )
-    `)
-    .eq('job_id', id)
-    .order('created_at', { ascending: false }) as { data: ApplicationWithCandidate[] | null }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: dbJob } = await (supabase as any)
+        .from('jobs')
+        .select('*')
+        .eq('id', id)
+        .single() as { data: JobRow | null; error: unknown }
 
-  const apps = rawApps ?? []
+      job = dbJob
+
+      if (job) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: rawApps } = await (supabase as any)
+          .from('applications')
+          .select(`
+            *,
+            candidates (
+              id,
+              full_name,
+              email
+            )
+          `)
+          .eq('job_id', id)
+          .order('created_at', { ascending: false }) as { data: ApplicationWithCandidate[] | null }
+
+        apps = rawApps ?? []
+      }
+    } catch (_err) {
+      // Supabase unavailable
+    }
+  }
+
+  // Mock store fallback
+  if (!job) {
+    job = mockStore.getJobById(id)
+    if (job) {
+      const mockApps = mockStore.getApplicationsByJob(id)
+      apps = mockApps.map(a => {
+        const c = mockStore.getCandidateById(a.candidate_id)
+        return {
+          ...a,
+          candidates: {
+            id: c?.id ?? a.candidate_id,
+            full_name: c?.full_name ?? 'Candidato',
+            email: c?.email ?? 'candidato@email.com',
+          },
+        }
+      })
+    }
+  }
+
+  if (!job) notFound()
+
   const req = job.requirements ?? { skills: [], languages: [], education: '', experience_years: 0 }
 
   return (

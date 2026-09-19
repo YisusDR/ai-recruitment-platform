@@ -72,31 +72,68 @@ function ScorePill({ score }: { score: number | null }) {
   )
 }
 
+import { mockStore } from '@/lib/mock/store'
+import { cookies } from 'next/headers'
+
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default async function CandidateDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  const supabase = await createClient()
+  const cookieStore = await cookies()
+  const isDemo = cookieStore.has('ats_demo_user')
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: candidate, error } = await (supabase as any)
-    .from('candidates')
-    .select('*')
-    .eq('id', id)
-    .is('deleted_at', null)
-    .single() as { data: CandidateRow | null; error: unknown }
+  let candidate: CandidateRow | null = null
+  let apps: ApplicationWithJob[] = []
 
-  if (error || !candidate) notFound()
+  if (!isDemo) {
+    try {
+      const supabase = await createClient()
 
-  // Fetch applications with linked jobs
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: rawApps } = await (supabase as any)
-    .from('applications')
-    .select(`*, jobs (id, title)`)
-    .eq('candidate_id', id)
-    .order('created_at', { ascending: false }) as { data: ApplicationWithJob[] | null }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: dbCandidate } = await (supabase as any)
+        .from('candidates')
+        .select('*')
+        .eq('id', id)
+        .is('deleted_at', null)
+        .single() as { data: CandidateRow | null; error: unknown }
 
-  const apps = rawApps ?? []
+      candidate = dbCandidate
+
+      if (candidate) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: rawApps } = await (supabase as any)
+          .from('applications')
+          .select(`*, jobs (id, title)`)
+          .eq('candidate_id', id)
+          .order('created_at', { ascending: false }) as { data: ApplicationWithJob[] | null }
+
+        apps = rawApps ?? []
+      }
+    } catch (_err) {
+      // Supabase unavailable
+    }
+  }
+
+  // Fallback to mock store
+  if (!candidate) {
+    candidate = mockStore.getCandidateById(id)
+    if (candidate) {
+      const mockApps = mockStore.getApplicationsByCandidate(id)
+      apps = mockApps.map(a => {
+        const job = mockStore.getJobById(a.job_id)
+        return {
+          ...a,
+          jobs: {
+            id: job?.id ?? a.job_id,
+            title: job?.title ?? 'Posición',
+          },
+        }
+      })
+    }
+  }
+
+  if (!candidate) notFound()
+
   const meta = candidate.metadata ?? { skills: [], languages: [], certifications: [], years_experience: 0 }
 
   return (

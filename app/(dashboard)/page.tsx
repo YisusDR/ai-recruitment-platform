@@ -9,6 +9,7 @@ import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { JobStatusBadge, StageBadge, InterviewResultBadge } from '@/components/ui/Badge'
 import { formatDate, formatDateTime, truncate } from '@/lib/utils'
+import { mockStore } from '@/lib/mock/store'
 import type { JobRow, CandidateRow, InterviewRow, ApplicationRow } from '@/lib/supabase/types'
 
 // ── Stat card ────────────────────────────────────────────────────────────────
@@ -34,27 +35,46 @@ function ArrowRightIcon() {
   )
 }
 
-// ── Page ─────────────────────────────────────────────────────────────────────
+import { cookies } from 'next/headers'
 
 export default async function DashboardPage() {
-  const supabase = await createClient()
+  const cookieStore = await cookies()
+  const isDemo = cookieStore.has('ats_demo_user')
 
-  // Parallel data fetching
-  const [jobsResult, candidatesResult, interviewsResult, appsResult] = await Promise.all([
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (supabase as any).from('jobs').select('id, title, status, created_at').order('created_at', { ascending: false }).limit(5) as Promise<{ data: Pick<JobRow, 'id' | 'title' | 'status' | 'created_at'>[] | null }>,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (supabase as any).from('candidates').select('id, full_name, email, embedding_status, created_at').is('deleted_at', null).order('created_at', { ascending: false }).limit(5) as Promise<{ data: Pick<CandidateRow, 'id' | 'full_name' | 'email' | 'embedding_status' | 'created_at'>[] | null }>,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (supabase as any).from('interviews').select('id, scheduled_at, result, interview_type, duration_minutes').order('scheduled_at', { ascending: true }).limit(5) as Promise<{ data: Pick<InterviewRow, 'id' | 'scheduled_at' | 'result' | 'interview_type' | 'duration_minutes'>[] | null }>,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (supabase as any).from('applications').select('id, stage').order('created_at', { ascending: false }) as Promise<{ data: Pick<ApplicationRow, 'id' | 'stage'>[] | null }>,
-  ])
+  let jobs: Pick<JobRow, 'id' | 'title' | 'status' | 'created_at'>[] = []
+  let candidates: Pick<CandidateRow, 'id' | 'full_name' | 'email' | 'embedding_status' | 'created_at'>[] = []
+  let interviews: Pick<InterviewRow, 'id' | 'scheduled_at' | 'result' | 'interview_type' | 'duration_minutes'>[] = []
+  let apps: Pick<ApplicationRow, 'id' | 'stage'>[] = []
 
-  const jobs = jobsResult.data ?? []
-  const candidates = candidatesResult.data ?? []
-  const interviews = interviewsResult.data ?? []
-  const apps = appsResult.data ?? []
+  if (!isDemo) {
+    try {
+      const supabase = await createClient()
+
+      // Parallel data fetching
+      const [jobsResult, candidatesResult, interviewsResult, appsResult] = await Promise.all([
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (supabase as any).from('jobs').select('id, title, status, created_at').order('created_at', { ascending: false }).limit(5) as Promise<{ data: Pick<JobRow, 'id' | 'title' | 'status' | 'created_at'>[] | null }>,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (supabase as any).from('candidates').select('id, full_name, email, embedding_status, created_at').is('deleted_at', null).order('created_at', { ascending: false }).limit(5) as Promise<{ data: Pick<CandidateRow, 'id' | 'full_name' | 'email' | 'embedding_status' | 'created_at'>[] | null }>,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (supabase as any).from('interviews').select('id, scheduled_at, result, interview_type, duration_minutes').order('scheduled_at', { ascending: true }).limit(5) as Promise<{ data: Pick<InterviewRow, 'id' | 'scheduled_at' | 'result' | 'interview_type' | 'duration_minutes'>[] | null }>,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (supabase as any).from('applications').select('id, stage').order('created_at', { ascending: false }) as Promise<{ data: Pick<ApplicationRow, 'id' | 'stage'>[] | null }>,
+      ])
+
+      jobs = jobsResult.data && jobsResult.data.length > 0 ? jobsResult.data : []
+      candidates = candidatesResult.data && candidatesResult.data.length > 0 ? candidatesResult.data : []
+      interviews = interviewsResult.data && interviewsResult.data.length > 0 ? interviewsResult.data : []
+      apps = appsResult.data && appsResult.data.length > 0 ? appsResult.data : []
+    } catch (_err) {
+      // Supabase failed
+    }
+  }
+
+  if (jobs.length === 0) jobs = mockStore.getJobs()
+  if (candidates.length === 0) candidates = mockStore.getCandidates()
+  if (interviews.length === 0) interviews = mockStore.getInterviews()
+  if (apps.length === 0) apps = mockStore.getApplications()
 
   // KPIs
   const openJobs = jobs.filter(j => j.status === 'open').length
