@@ -49,7 +49,6 @@ function SignupForm() {
   const [error, setError]         = useState<string | null>(null)
   const [loading, setLoading]     = useState(false)
   const router = useRouter()
-  const supabase = createClient()
 
   const handleSignup = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
@@ -57,6 +56,7 @@ function SignupForm() {
     setLoading(true)
 
     // ── Step 1: Create auth user ─────────────────────────────────────────────
+    const supabase = createClient()
     const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
       email,
       password,

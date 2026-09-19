@@ -34,15 +34,36 @@ export function TopBar() {
   const pathname  = usePathname()
   const router    = useRouter()
   const title     = getTitle(pathname)
-  const supabase  = createClient()
   const [loggingOut, setLoggingOut] = useState(false)
   const [userName, setUserName] = useState<string | null>(null)
   const [userInitial, setUserInitial] = useState('U')
 
   useEffect(() => {
     async function loadUser() {
+      // 1. Check for demo user cookie first (instant, zero network latency)
+      if (typeof document !== 'undefined') {
+        const match = document.cookie.match(/ats_demo_user=([^;]+)/)
+        if (match) {
+          try {
+            const demoUser = JSON.parse(decodeURIComponent(match[1]))
+            setUserName(demoUser.name || 'Admin Dev')
+            setUserInitial((demoUser.name || 'A').charAt(0).toUpperCase())
+            return
+          } catch (_e) {
+            // ignore
+          }
+        }
+      }
+
+      // 2. Otherwise check Supabase session if present
       try {
-        const { data: { user } } = await supabase.auth.getUser()
+        const supabase = createClient()
+        const userPromise = supabase.auth.getUser()
+        const timeoutPromise = new Promise<{ data: { user: null } }>((resolve) =>
+          setTimeout(() => resolve({ data: { user: null } }), 1000)
+        )
+        const { data: { user } } = await Promise.race([userPromise, timeoutPromise])
+
         if (user) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const { data: recruiter } = await (supabase as any)
@@ -60,32 +81,21 @@ export function TopBar() {
         // network/Supabase down
       }
 
-      // Check for demo user cookie fallback
-      if (typeof document !== 'undefined') {
-        const match = document.cookie.match(/ats_demo_user=([^;]+)/)
-        if (match) {
-          try {
-            const demoUser = JSON.parse(decodeURIComponent(match[1]))
-            setUserName(demoUser.name || 'Admin Dev')
-            setUserInitial((demoUser.name || 'A').charAt(0).toUpperCase())
-            return
-          } catch (_e) {
-            // ignore
-          }
-        }
-      }
-
       setUserName('Admin Demo')
       setUserInitial('A')
     }
     loadUser()
-  }, [supabase])
+  }, [])
 
   const handleLogout = async () => {
     setLoggingOut(true)
     try {
       await fetch('/api/auth/logout', { method: 'POST' })
-      await supabase.auth.signOut()
+      const supabase = createClient()
+      await Promise.race([
+        supabase.auth.signOut(),
+        new Promise(resolve => setTimeout(resolve, 500)),
+      ])
     } catch (_err) {
       // ignore
     }

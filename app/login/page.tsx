@@ -41,7 +41,6 @@ function LoginForm() {
   const [loading, setLoading]   = useState(false)
   const router       = useRouter()
   const searchParams = useSearchParams()
-  const supabase     = createClient()
 
   const handleDemoLogin = async () => {
     setLoading(true)
@@ -66,6 +65,7 @@ function LoginForm() {
 
     // ── Step 1: Authenticate with Supabase Auth ──────────────────────────────
     try {
+      const supabase = createClient()
       const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
         email,
         password,

@@ -56,7 +56,12 @@ export async function middleware(request: NextRequest) {
         },
       )
 
-      const userResponse = await supabase.auth.getUser()
+      // Short timeout (800ms) to ensure middleware never stalls SSR/routes on network failure
+      const userPromise = supabase.auth.getUser()
+      const timeoutPromise = new Promise<{ data: { user: null }; error: Error }>((resolve) =>
+        setTimeout(() => resolve({ data: { user: null }, error: new Error('Auth timeout') }), 800)
+      )
+      const userResponse = await Promise.race([userPromise, timeoutPromise])
       user = userResponse.data?.user ?? null
     } catch (_err) {
       user = null
