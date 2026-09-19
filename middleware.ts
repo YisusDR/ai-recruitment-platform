@@ -10,8 +10,6 @@ import { NextResponse, type NextRequest } from 'next/server'
 import type { Database } from '@/lib/supabase/types'
 
 export async function middleware(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({ request })
-
   const { pathname } = request.nextUrl
 
   // Public routes — never redirect these regardless of auth state
@@ -25,37 +23,44 @@ export async function middleware(request: NextRequest) {
   const demoCookie = request.cookies.get('ats_demo_user')?.value
 
   let user = null
+  let supabaseResponse = NextResponse.next({ request })
 
-  try {
-    const supabase = createServerClient<Database>(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return request.cookies.getAll()
-          },
-          setAll(
-            cookiesToSet: { name: string; value: string; options?: CookieOptions }[],
-          ) {
-            cookiesToSet.forEach(({ name, value }) =>
-              request.cookies.set(name, value),
-            )
-            supabaseResponse = NextResponse.next({ request })
-            cookiesToSet.forEach(({ name, value, options }) =>
-              supabaseResponse.cookies.set(name, value, options),
-            )
+  // Only attempt Supabase network call if a Supabase auth cookie is actually present
+  const allCookies = request.cookies.getAll()
+  const hasSupabaseCookie = allCookies.some(
+    c => c.name.includes('-auth-token') || c.name.startsWith('sb:')
+  )
+
+  if (!demoCookie && hasSupabaseCookie) {
+    try {
+      const supabase = createServerClient<Database>(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        {
+          cookies: {
+            getAll() {
+              return request.cookies.getAll()
+            },
+            setAll(
+              cookiesToSet: { name: string; value: string; options?: CookieOptions }[],
+            ) {
+              cookiesToSet.forEach(({ name, value }) =>
+                request.cookies.set(name, value),
+              )
+              supabaseResponse = NextResponse.next({ request })
+              cookiesToSet.forEach(({ name, value, options }) =>
+                supabaseResponse.cookies.set(name, value, options),
+              )
+            },
           },
         },
-      },
-    )
+      )
 
-    // Refresh session — safe check with timeout/catch
-    const userResponse = await supabase.auth.getUser()
-    user = userResponse.data?.user ?? null
-  } catch (_err) {
-    // Unreachable Supabase or network error — fall back to demo mode if cookie exists
-    user = null
+      const userResponse = await supabase.auth.getUser()
+      user = userResponse.data?.user ?? null
+    } catch (_err) {
+      user = null
+    }
   }
 
   const isAuthenticated = !!user || !!demoCookie
